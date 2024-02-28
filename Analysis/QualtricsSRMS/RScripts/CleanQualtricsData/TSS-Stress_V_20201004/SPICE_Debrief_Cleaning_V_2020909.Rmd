@@ -1,0 +1,434 @@
+---
+title: "SPICE_V_xxx_Debrief_Cleaning"
+output:
+  html_document:
+    code_folding: hide
+    theme: default
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Clean Enviorment
+```{r, echo=FALSE, warning=FALSE}
+
+#Clear environemnt and Load Packages
+
+# clear the environment
+rm(list=ls()) 
+
+#detach("package:here", unload = TRUE)
+
+if (!require("pacman")) install.packages("pacman")
+ pacman::p_load(
+   plyr,  # For join function
+   tidyverse, #for dyplr function
+   stringr #for splitting string data
+   )
+```
+
+#Set Working Directory and Paths 
+```{r, echo=FALSE, warning=FALSE}
+
+# Set Working Directory and Paths 
+curDir=getwd()
+## set directory 
+setwd(curDir)
+curDate=Sys.Date()
+# import data
+
+#CHANGE ONLY INFORMATION BELOW#
+##------------##
+#set version to current study version
+curVersion="SPICE20200909"
+
+#Change path to the raw data: change the file name after Raw/
+path.raw.data= "../../../../Data/Qualtrics/Raw/SPICE-Debrief+Current_October+26,+2020_12.46.csv"
+
+#only indluce if also doin prolific
+#ProlificLogPath<-"../../../../Participants/Prolific/prolific_export_TCB_20200724.csv"
+
+#Change path to the sona participant log: change the file name after Sona/
+
+##------------##
+SONA_PAYLogPath=paste0("../../../../Participants/",curVersion,"/SONA_PAY")
+SONA_CREDITLogPath=paste0("../../../../Participants/",curVersion,"/SONA_CREDIT")
+
+
+path.clean.data = paste("../../../../Data/Qualtrics/Clean/", curDate,"_SPICE_SRMS_Clean_Version_",curVersion,".csv", sep = "")
+
+```
+
+#Import Raw Data
+```{r, echo=FALSE, warning=FALSE}
+
+#import raw data
+
+
+data.raw = read.csv(file = path.raw.data,header=TRUE,na.strings="")
+
+
+Sona_PayFiles = list.files(path=SONA_PAYLogPath, pattern="*.csv", full.names=TRUE)
+data.SonaPay = ldply(Sona_PayFiles, read_csv)
+
+Sona_CreditFiles = list.files(path=SONA_CREDITLogPath, pattern="*.csv", full.names=TRUE)
+
+data.SonaCredit = ldply(Sona_CreditFiles, read_csv)
+
+```
+
+
+
+#Filter Sona and Prolific Participant logs by Approved (PROLIFIC) and Participated (SONA)
+<!--This does not yet filter out people who might have had errors or messaged the researcher-->
+
+```{r, echo=FALSE, warning=FALSE}
+
+
+if(length(data.SonaCredit!=0))(
+data.SonaCredit.filter<- data.SonaCredit %>%
+    dplyr::filter(credit_type=="Participated")%>%
+    dplyr::select(survey_id)%>%
+    distinct(survey_id)%>%
+    rename(SubID=survey_id)
+
+)
+
+if(length(data.SonaPay!=0))(
+data.SonaPay.filter<- data.SonaPay %>%
+   dplyr::filter(credit_type=="Participated")%>%
+    dplyr::select(survey_id)%>%
+    distinct(survey_id)%>%
+    rename(SubID=survey_id)
+)
+# 
+# if(length(data.prolific!=0))(
+# 
+# data.prolific.filter<- data.prolific %>%
+#    dplyr::select(participant_id,status)%>%
+#    dplyr::filter(status=="APPROVED")%>%
+#     dplyr::select(participant_id)%>%
+#     distinct(participant_id)%>%
+#     rename(SubID=participant_id)
+# )
+# 
+# data.Independent<- data.raw%>%
+#   filter(PLATFORM=="INDEPENDENT")%>%
+#   select(INDEPENDENT_PID)%>%
+#   distinct(INDEPENDENT_PID)%>%
+#     rename(SubID=INDEPENDENT_PID)
+
+data.SubjectListCombined<- join(data.SonaCredit.filter, data.SonaPay.filter,type= "full")
+#data.SubjectListCombined<- join(data.prolific.filter, data.SonaPay.filter,type= "full")
+#data.SubjectListCombined<- join(data.SubjectListCombined,data.Independent,type= "full")
+```
+
+
+
+#Filter Raw Data by Study Version
+```{r, echo=FALSE, warning=FALSE}
+
+data.filter<- data.raw %>%
+   dplyr::filter(assignmentId==curVersion)
+
+```
+
+
+#Filter Raw Data by IDs in prolific and sona subject logs
+```{r, echo=FALSE, warning=FALSE}
+
+data.filter<- data.filter %>%
+# dplyr::filter(workerId %in%data.prolific.filter$participant_id |SubID %in%data.Sona.filter$survey_id ) 
+  dplyr::filter(workerId %in%data.SubjectListCombined$SubID ) 
+```
+
+
+
+
+## Embedded Data Information
+```{r , echo=FALSE}
+data.Embedded=data.filter %>%
+  dplyr::select(workerId,PLATFORM, bG,bP,Group,order)
+
+```
+
+
+
+## Difficulty Cues
+<!-- Scored on a 12 point scale -->
+
+<!-- PosHigh_1:Like -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_2:Pleasant -5 unpleasant/negative = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 pleasant/positive= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_3:Arousal -5 relaxed/calm = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 stimulated/aroused= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_4:Motivation -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_5:Difficult -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_6:Effort -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+
+<!-- PosHigh_7:Attention -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+### Low Difficulty Cue
+```{r, echo=FALSE, warning=FALSE}
+
+# recode data
+data.PosHigh=data.filter %>%
+  dplyr::select(workerId,PLATFORM,starts_with("Composite_Collector_PosLPenL"))%>% # select the variables you would like to work with (Always ID)
+  dplyr::mutate_all(as.character)%>% # turn into the data type into character
+  replace(.=="-5  Not at all" ,-5)%>% #replace and recode
+  replace(.=="-5  unpleasant/negative" ,-5)%>%
+  replace(.=="-5  relaxed/calm" ,-5)%>%
+  replace(.=="-4",-4)%>%
+  replace(.=="-3",-3)%>%
+  replace(.=="-2",-2)%>%
+  replace(.=="-1",-1)%>%
+  replace(.=="0  Neutral",0)%>%
+  replace(.=="1",1)%>%
+  replace(.=="2",2)%>%
+  replace(.=="3",3)%>%
+  replace(.=="4",4)%>%
+  replace(.=="5  A lot" ,5)%>%
+  replace(.=="5 pleasant/positive"  ,5)%>%
+  replace(.=="5  stimulated/aroused",5)%>%
+  dplyr::mutate_at(vars(starts_with("PosHigh_")),as.numeric)%>% # turn into the data type into numeric
+  replace(.=="Prefer not to respond",NA)
+
+
+# rename variables to informative name
+data.PosHigh<-data.PosHigh %>%
+  rename(PosHigh_Like= PosHigh__1, #7
+         PosHigh_Pleasant= PosHigh__2, #1
+         PosHigh_Arousal= PosHigh__3, #2
+         PosHigh_Motivation= PosHigh__4, #3
+         PosHigh_Difficult= PosHigh__5, #4
+         PosHigh_Effort= PosHigh__6, #5
+         PosHigh_Attention= PosHigh__7) #6
+  
+
+  
+```
+
+### High Difficulty Cue
+```{r, echo=FALSE, warning=FALSE}
+
+# recode data
+data.PosLow=data.filter %>%
+  dplyr::select(workerId,PLATFORM,starts_with("Composite_Collector_PosLPenH"))%>% # select the variables you would like to work with (Always ID)
+  dplyr::mutate_all(as.character)%>% # turn into the data type into character
+  replace(.=="-5  Not at all" ,-5)%>% #replace and recode
+  replace(.=="-5  unpleasant/negative" ,-5)%>%
+  replace(.=="-5  relaxed/calm" ,-5)%>%
+  replace(.=="-4",-4)%>%
+  replace(.=="-3",-3)%>%
+  replace(.=="-2",-2)%>%
+  replace(.=="-1",-1)%>%
+  replace(.=="0  Neutral",0)%>%
+  replace(.=="1",1)%>%
+  replace(.=="2",2)%>%
+  replace(.=="3",3)%>%
+  replace(.=="4",4)%>%
+  replace(.=="5  A lot" ,5)%>%
+  replace(.=="5 pleasant/positive"  ,5)%>%
+  replace(.=="5  stimulated/aroused",5)%>%
+  dplyr::mutate_at(vars(starts_with("PosLow_")),as.numeric)%>% # turn into the data type into numeric
+  replace(.=="Prefer not to respond",NA)
+
+
+# rename variables to informative name
+data.PosLow<-data.PosLow %>%
+  rename(PosLow_Like= PosLow__1, #Composite_Collector_PosLPenH_1
+         PosLow_Pleasant= PosLow__2,
+         PosLow_Arousal= PosLow__3,
+         PosLow_Motivation= PosLow__4,
+         PosLow_Difficult= PosLow__5,
+         PosLow_Effort= PosLow__6,
+         PosLow_Attention= PosLow__7)
+  
+
+  
+```
+
+
+
+
+## Feedback
+<!-- Scored on a 12 point scale -->
+
+<!-- Apple_1:Like -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_2:Pleasant -5 unpleasant/negative = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 pleasant/positive= 5 Prefer not to respond =NA -->
+
+<!-- Apple_3:Arousal -5 relaxed/calm = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 stimulated/aroused= 5 Prefer not to respond =NA -->
+
+<!-- Apple_4:Motivation -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_5:Difficult -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_6:Effort -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_7:Attention -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+
+### Easy Feedback 1
+```{r, echo=FALSE, warning=FALSE}
+
+# recode data
+data.Apple=data.filter %>%
+  dplyr::select(workerId,PLATFORM,starts_with("Apple_"))%>% # select the variables you would like to work with (Always ID)
+  dplyr::mutate_all(as.character)%>% # turn into the data type into character
+  replace(.=="-5  Not at all" ,-5)%>% #replace and recode
+  replace(.=="-5  unpleasant/negative" ,-5)%>%
+  replace(.=="-5  relaxed/calm" ,-5)%>%
+  replace(.=="-4",-4)%>%
+  replace(.=="-3",-3)%>%
+  replace(.=="-2",-2)%>%
+  replace(.=="-1",-1)%>%
+  replace(.=="0  Neutral",0)%>%
+  replace(.=="1",1)%>%
+  replace(.=="2",2)%>%
+  replace(.=="3",3)%>%
+  replace(.=="4",4)%>%
+  replace(.=="5  A lot" ,5)%>%
+  replace(.=="5 pleasant/positive"  ,5)%>%
+  replace(.=="5  stimulated/aroused",5)%>%
+  dplyr::mutate_at(vars(starts_with("Apple_")),as.numeric)%>% # turn into the data type into numeric
+  replace(.=="Prefer not to respond",NA)
+
+
+# rename variables to informative name
+data.Apple <-data.Apple %>%
+  rename(Apple_Like=Apple__1,
+         Apple_Pleasant= Apple__2,
+         Apple_Arousal= Apple__3,
+         Apple_Motivation= Apple__4,
+         Apple_Difficult= Apple__5,
+         Apple_Effort= Apple__6,
+         Apple_Attention= Apple__7)
+  
+```
+
+### Easy Feedback 2
+```{r, echo=FALSE, warning=FALSE}
+
+# recode data
+data.Peach=data.filter %>%
+  dplyr::select(workerId,PLATFORM,starts_with("Peach_"))%>% # select the variables you would like to work with (Always ID)
+  dplyr::mutate_all(as.character)%>% # turn into the data type into character
+  replace(.=="-5  Not at all" ,-5)%>% #replace and recode
+  replace(.=="-5  unpleasant/negative" ,-5)%>%
+  replace(.=="-5  relaxed/calm" ,-5)%>%
+  replace(.=="-4",-4)%>%
+  replace(.=="-3",-3)%>%
+  replace(.=="-2",-2)%>%
+  replace(.=="-1",-1)%>%
+  replace(.=="0  Neutral",0)%>%
+  replace(.=="1",1)%>%
+  replace(.=="2",2)%>%
+  replace(.=="3",3)%>%
+  replace(.=="4",4)%>%
+  replace(.=="5  A lot" ,5)%>%
+  replace(.=="5 pleasant/positive"  ,5)%>%
+  replace(.=="5  stimulated/aroused",5)%>%
+  dplyr::mutate_at(vars(starts_with("Peach_")),as.numeric)%>% # turn into the data type into numeric
+  replace(.=="Prefer not to respond",NA)
+
+
+# rename variables to informative name
+data.Peach <-data.Peach %>%
+  rename(Peach_Like=Peach__1,
+         Peach_Pleasant= Peach__2,
+         Peach_Arousal= Peach__3,
+         Peach_Motivation= Peach__4,
+         Peach_Difficult= Peach__5,
+         Peach_Effort= Peach__6,
+         Peach_Attention= Peach__7)
+  
+```
+
+### Hard Feedback1 
+```{r, echo=FALSE, warning=FALSE}
+
+# recode data
+data.Pear=data.filter %>%
+  dplyr::select(workerId,PLATFORM,starts_with("Pear_"))%>% # select the variables you would like to work with (Always ID)
+  dplyr::mutate_all(as.character)%>% # turn into the data type into character
+  replace(.=="-5  Not at all" ,-5)%>% #replace and recode
+  replace(.=="-5  unpleasant/negative" ,-5)%>%
+  replace(.=="-5  relaxed/calm" ,-5)%>%
+  replace(.=="-4",-4)%>%
+  replace(.=="-3",-3)%>%
+  replace(.=="-2",-2)%>%
+  replace(.=="-1",-1)%>%
+  replace(.=="0  Neutral",0)%>%
+  replace(.=="1",1)%>%
+  replace(.=="2",2)%>%
+  replace(.=="3",3)%>%
+  replace(.=="4",4)%>%
+  replace(.=="5  A lot" ,5)%>%
+  replace(.=="5 pleasant/positive"  ,5)%>%
+  replace(.=="5  stimulated/aroused",5)%>%
+  dplyr::mutate_at(vars(starts_with("Pear_")),as.numeric)%>% # turn into the data type into numeric
+  replace(.=="Prefer not to respond",NA)
+
+
+# rename variables to informative name
+data.Pear <-data.Pear %>%
+  rename(Pear_Like=Pear__1,
+         Pear_Pleasant= Pear__2,
+         Pear_Arousal= Pear__3,
+         Pear_Motivation= Pear__4,
+         Pear_Difficult= Pear__5,
+         Pear_Effort= Pear__6,
+         Pear_Attention= Pear__7)
+  
+```
+### Hard Feedback 2
+```{r, echo=FALSE, warning=FALSE}
+
+# recode data
+data.Lemon=data.filter %>%
+  dplyr::select(workerId,PLATFORM,starts_with("Lemon_"))%>% # select the variables you would like to work with (Always ID)
+  dplyr::mutate_all(as.character)%>% # turn into the data type into character
+  replace(.=="-5  Not at all" ,-5)%>% #replace and recode
+  replace(.=="-5  unpleasant/negative" ,-5)%>%
+  replace(.=="-5  relaxed/calm" ,-5)%>%
+  replace(.=="-4",-4)%>%
+  replace(.=="-3",-3)%>%
+  replace(.=="-2",-2)%>%
+  replace(.=="-1",-1)%>%
+  replace(.=="0  Neutral",0)%>%
+  replace(.=="1",1)%>%
+  replace(.=="2",2)%>%
+  replace(.=="3",3)%>%
+  replace(.=="4",4)%>%
+  replace(.=="5  A lot" ,5)%>%
+  replace(.=="5 pleasant/positive"  ,5)%>%
+  replace(.=="5  stimulated/aroused",5)%>%
+  dplyr::mutate_at(vars(starts_with("Lemon_")),as.numeric)%>% # turn into the data type into numeric
+  replace(.=="Prefer not to respond",NA)
+
+
+# rename variables to informative name
+data.Lemon <-data.Lemon %>%
+  rename(Lemon_Like=Lemon__1,
+         Lemon_Pleasant= Lemon__2,
+         Lemon_Arousal= Lemon__3,
+         Lemon_Motivation= Lemon__4,
+         Lemon_Difficult= Lemon__5,
+         Lemon_Effort= Lemon__6,
+         Lemon_Attention= Lemon__7)
+  
+```
+

@@ -1,0 +1,340 @@
+---
+title: "SPICE_V_xxx_Debrief_Missing_Data"
+output:
+  html_document:
+    code_folding: hide
+    theme: default
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Clean Enviorment
+```{r, echo=FALSE, warning=FALSE}
+
+#Clear environemnt and Load Packages
+
+# clear the environment
+rm(list=ls()) 
+
+#detach("package:here", unload = TRUE)
+
+if (!require("pacman")) install.packages("pacman")
+ pacman::p_load(
+   plyr,  # For join function
+   tidyverse, #for dyplr functions
+   )
+```
+
+#Set Working Directory and Paths  #Linda- this is spot to change
+```{r, echo=FALSE, warning=FALSE}
+
+# Set Working Directory and Paths 
+curDir=getwd()
+## set directory 
+setwd(curDir)
+curDate=Sys.Date()
+# import data
+
+#CHANGE ONLY INFORMATION BELOW#
+##------------##
+#set version to current study version
+curVersion="TSS-Stress_20201004"
+
+#Change path to the raw data: change the file name after Clean/
+path.raw.data= "../../../../../Data/QualtricsSRMS/TSS-Stress_20201004/CleanedData/TSS-Stress_Debrief_Clean_Version_TSS-Stress_20201004_Date_2020-11-15.csv"
+
+##------------##
+
+path.clean.data = paste("../../../../../Data/QualtricsSRMS/TSS-Stress_20201004/SummaryData/", curDate,"_SPICE_SRMS_Clean_MissingData_Version_",curVersion,".csv", sep = "")
+
+path.NA.data = paste("../../../../Data/Qualtrics/Clean/", curDate,"_SPICE_SRMS_Clean_MissingDataSummary_Version_",curVersion,".csv", sep = "")
+
+
+```
+
+#Import Cleaned Datat File
+```{r, echo=FALSE, warning=FALSE}
+
+#import raw data
+
+data.raw = read.csv(file = path.raw.data,header=TRUE,na.strings="NA")
+```
+
+
+
+## Embedded Data Information
+```{r , echo=FALSE}
+data.Embedded=data.raw %>%
+  dplyr::select(WorkerID,PLATFORM,bP,order)
+
+```
+
+
+
+## Stakes Cues
+<!-- Scored on a 12 point scale -->
+
+<!-- PosHigh_1:Like -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_2:Pleasant -5 unpleasant/negative = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 pleasant/positive= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_3:Arousal -5 relaxed/calm = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 stimulated/aroused= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_4:Motivation -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_5:Difficult -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- PosHigh_6:Effort -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+
+<!-- PosHigh_7:Attention -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+### Easy
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.Easy <-data.raw %>%
+  dplyr::select(WorkerID,starts_with("Easy_")) %>%
+  dplyr::mutate(Easy_NA_Count=rowSums(is.na(.)))
+  
+  
+```
+
+### Hard
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.Hard <-data.raw %>%
+  dplyr::select(WorkerID,starts_with("Hard_")) %>%
+  dplyr::mutate(Hard_NA_Count=rowSums(is.na(.)))
+  
+```
+
+## Group Cues
+<!-- Scored on a 12 point scale -->
+
+<!-- Personal_1:Like -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Personal_2:Pleasant -5 unpleasant/negative = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 pleasant/positive= 5 Prefer not to respond =NA -->
+
+<!-- Personall_3:Arousal -5 relaxed/calm = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 stimulated/aroused= 5 Prefer not to respond =NA -->
+
+<!-- Personal_4:Motivation -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Personal_5:Difficult -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Personal_6:Effort -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Personal_7:Attention -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+
+### Easy Reached FB
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.EasyReachedFB=data.raw %>%
+  dplyr::select(WorkerID,starts_with("EasyReachedFB_"))%>% 
+  dplyr::mutate(EasyReachedFB_NA_Count=rowSums(is.na(.)))
+```
+
+### Easy Failed FB
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.EasyFailedFB=data.raw %>%
+  dplyr::select(WorkerID,starts_with("EasyFailedFB_"))%>% 
+  dplyr::mutate(EasyFailedFB_NA_Count=rowSums(is.na(.)))
+```
+
+### Hard Reached FB
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.HardReachedFB=data.raw %>%
+  dplyr::select(WorkerID,starts_with("HardReachedFB_"))%>% 
+  dplyr::mutate(HardReachedFB_NA_Count=rowSums(is.na(.)))
+```
+
+### Hard Failed FB
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.HardFailedFB=data.raw %>%
+  dplyr::select(WorkerID,starts_with("HardFailedFB_"))%>% 
+  dplyr::mutate(HardFailedFB_NA_Count=rowSums(is.na(.)))
+```
+
+
+## Stimuli
+<!-- Scored on a 12 point scale -->
+
+<!-- Apple_1:Like -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_2:Pleasant -5 unpleasant/negative = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 pleasant/positive= 5 Prefer not to respond =NA -->
+
+<!-- Apple_3:Arousal -5 relaxed/calm = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 stimulated/aroused= 5 Prefer not to respond =NA -->
+
+<!-- Apple_4:Motivation -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_5:Difficult -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_6:Effort -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+<!-- Apple_7:Attention -5 Not at all = -5, -4=-4, -3=-3, -2=-2, -1=-1, 0 Neutral=0, 1=1,2=2,3=3,4=4,5 A lot= 5 Prefer not to respond =NA -->
+
+
+### Apple
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.Apple=data.raw %>%
+  dplyr::select(workerId,starts_with("Apple_"))%>%
+  dplyr::mutate(Apple_NA_Count=rowSums(is.na(.)))
+  
+```
+
+### Peach
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.Peach=data.raw %>%
+  dplyr::select(workerId,starts_with("Peach_"))%>%
+  dplyr::mutate(Peach_NA_Count=rowSums(is.na(.)))
+```
+
+### Pear
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.Pear=data.raw %>%
+  dplyr::select(workerId,starts_with("Pear_"))%>% 
+  dplyr::mutate(Pear_NA_Count=rowSums(is.na(.)))
+  
+```
+### Lemon
+```{r, echo=FALSE, warning=FALSE}
+
+# create data frame and add count of Na's per row (each row is a participant)
+data.Lemon=data.raw %>%
+  dplyr::select(workerId,starts_with("Lemon_"))%>%
+  dplyr::mutate(Lemon_NA_Count=rowSums(is.na(.)))
+  
+```
+
+
+## Student Group Questions 
+<!-- Member: Yes, No, Prefer not to respond =NA -->
+<!-- KnownMembers: Yes, No, Prefer not to respond =NA -->
+<!-- NumMembers: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13+ -->
+<!-- Familiar: Extremely familiar,Very familiar,Moderately familiar,Slightly familiar, Not familiar at all, Prefer not to respond-->
+<!-- InteractFreq: Daily, 4-6 times a week, 2-3 times a week, Once a week, Once a Month, Never, Prefer not to respond -->
+<!-- InteractMeth --> 
+
+```{r , echo=FALSE}
+
+data.StudentGroup=data.raw %>%
+  dplyr::select(workerId,PLATFORM, Member,KnownMembers,NumMembers,Familiar,InteractFreq,starts_with("InteractMeth"))
+
+
+```
+
+
+## Income Relative to others
+
+<!--Relative to the average American household, what was the income level of your immediate family during your childhood and currently  IncRel_1=childhood IncRel_1=currently -->
+<!--1-10 1 =low 10= high -->
+```{r , echo=FALSE}
+
+data.IncRel=data.raw %>%
+  dplyr::select(workerId, starts_with("IncRel_"))%>%
+  dplyr::mutate(IncRel_NA_Count=rowSums(is.na(.)))
+
+```
+
+## MacArthur Current and Prior to Age of 18
+<!-- Socioeconomic Status Ladder subscale item is Q1_a, The Community Ladder subscale item is Q2_a.
+
+a_ are prior to 18
+b_are currently
+
+Scored= 1-10; 1 bottom of ladder- 10 top of ladder-->
+
+```{r , echo=FALSE}
+
+
+data.MacAr=data.raw %>%
+  dplyr::select(workerId, starts_with("Mac_"))%>%
+  dplyr::mutate(Mac_NA_Count=rowSums(is.na(.)))
+
+```
+
+
+
+```{r, echo=FALSE}
+
+
+#merge all of the cleaned data files 
+
+data.cleanSPICEDEBRIEF <-data.Embedded %>%
+  join(data.Memory,by=c("workerId") ) %>%
+  join(data.Demographic,by=c("workerId") ) %>%
+  join(data.Eligibility,by=c("workerId") ) %>%
+  join(data.PosHigh,by=c("workerId") ) %>%
+  join(data.PosLow,by=c("workerId") ) %>%
+  join(data.Personal,by=c("workerId") ) %>%
+  join(data.Group,by=c("workerId") ) %>%
+  join(data.Apple,by=c("workerId") ) %>%
+  join(data.Pear,by=c("workerId") ) %>%
+  join(data.Lemon,by=c("workerId") ) %>%
+  join(data.Peach,by=c("workerId") ) %>%
+  join(data.StudentGroup,by=c("workerId") ) %>%
+  join(data.IncRel,by=c("workerId") )%>%
+  join(data.MacAr,by=c("workerId") )
+
+
+
+```
+
+
+
+```{r, echo=FALSE}
+
+# Create data frame of just the NAs
+data.NA_SPICEDEBRIEF<-data.cleanSPICEDEBRIEF%>%
+  dplyr::select(workerId,contains("_NA_Count"))
+
+#add variable for total NA count to NA data frame
+data.NA_SPICEDEBRIEF$Total_NA_Count=rowSums(data.NA_SPICEDEBRIEF[,c(-1)])
+
+#add variable for total NA count to Cleaned data frame
+data.cleanSPICEDEBRIEF$Total_NA_Count=data.NA_SPICEDEBRIEF$Total_NA_Count
+
+
+```
+
+
+
+
+```{r, echo=FALSE}
+
+
+# write the csv with NA info and cleaned info
+write.csv(data.cleanSPICEDEBRIEF,path.clean.data, row.names = FALSE)
+
+
+#write the csv with NA info 
+write.csv(data.NA_SPICEDEBRIEF,path.NA.data, row.names = FALSE)
+
+
+```
+
+

@@ -1,0 +1,60 @@
+knitr::opts_chunk$set(echo = TRUE)
+#Clear environemnt and Load Packages
+# clear the environment
+rm(list=ls())
+#detach("package:here", unload = TRUE)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+plyr,  # For join function
+tidyverse, #for dyplr functions
+here # for setting path and working directory
+)
+# set the Working Directory and paths
+here()
+# set seed
+set.seed(42)
+# set directory
+setwd(here())
+# import data
+#set version
+curVersion="TSS-Stress_20201004"
+curDate=Sys.Date()
+path.raw.data= "../../../../../Data/QualtricsSRMS/TSS-Stress_20201004/RawData/TSS-Stress-SRMS_November+11,+2020_13.39.csv"
+path.clean.data = paste0("../../../../../Data/QualtricsSRMS/",curVersion,"/CleanedData/TSS-Stress_SRMS_Clean_Version_",curVersion,"_Date_",curDate,".csv", sep = "")
+ProlificLogPath=paste0("../../../../../Participants/",curVersion,"/Prolific/")
+SONA_PAYLogPath=paste0("../../../../../Participants/",curVersion,"/SONA_PAY/")
+SONA_CREDITLogPath=paste0("../../../../../Participants/",curVersion,"/SONA_CREDIT/")
+#import raw data
+data.raw = read.csv(file = path.raw.data,header=TRUE,na.strings="")
+prolificFiles = list.files(path=ProlificLogPath, pattern="*.csv", full.names=TRUE)
+data.prolific = ldply(prolificFiles, read_csv)
+Sona_PayFiles = list.files(path=SONA_PAYLogPath, pattern="*.csv", full.names=TRUE)
+data.SonaPay = ldply(Sona_PayFiles, read_csv)
+Sona_CreditFiles = list.files(path=SONA_CREDITLogPath, pattern="*.csv", full.names=TRUE)
+data.SonaCredit = ldply(Sona_CreditFiles, read_csv)
+#data.Error = read.csv(file = ErrorLogPath,header=TRUE,na.strings="NaN")
+if(length(data.SonaCredit!=0))(
+data.Sona.filter<- data.Sona %>%
+dplyr::select(survey_id,credit_type)%>%
+dplyr::filter(credit_type=="Participated")%>%
+dplyr::select(survey_id)%>%
+distinct(participant_id)
+)
+if(length(data.SonaPay!=0))(
+data.SonaPay.filter<- data.SonaPay %>%
+#dplyr::select(survey_id,credit_type)%>%
+dplyr::filter(credit_type=="Participated")%>%
+#dplyr::select(survey_id)%>%
+distinct(survey_id)%>%
+rename(SubID=survey_id)
+)
+if(length(data.prolific!=0))(
+data.prolific.filter<- data.prolific %>%
+dplyr::select(participant_id,status)%>%
+dplyr::filter(status=="APPROVED")%>%
+dplyr::select(participant_id)%>%
+distinct(participant_id)%>%
+rename(SubID=participant_id)
+)
+View(data.prolific)
+View(data.prolific.filter)

@@ -1,0 +1,1211 @@
+---
+title: "TSSS Task Analysis Script Exp 2 (Challenge & Reward Lvl)"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    number_sections: true
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Cleaning and Prep
+## Load packages
+```{r warning=FALSE, include=FALSE}
+library(plyr)
+library(tidyverse)
+library(knitr)
+library(rmarkdown)
+#library(summarytools)
+library(psych)
+library(PCAmixdata)
+library(corrplot)
+library(rstudioapi) 
+library(lme4)
+library(sjPlot)
+library(RColorBrewer)
+library(ggplot2)
+library(lmerTest)
+source("../RFunctions/normDataWithin.R")
+source("../RFunctions/summarySE.R")
+source("../RFunctions/summarySEwithinO.R")
+```
+
+## Load in datasets
+```{r include=FALSE}
+# Load in the behavioral data
+df.trial <- read.csv('../../Data/Task/TSSS_Exp2_Raw.csv')
+
+# Load in Demographics data
+df.SRM<-read.csv("../../Data/QualtricsSRMS/TSSS_SRMS_Exp2.csv",header=TRUE,na.strings=c("NA"))
+```
+
+## Format dataframe for Trial-level data
+Add a variable 'TrialSessionNum' which corresponds to the trialnumber across the entire session for a single participant. This is calculated prior to removed any intervals or trials for analysis purposes.
+```{r warning=TRUE, include=FALSE}
+# Subjects to exclude
+sub.trials<-data.frame(table(df.trial$uniqueid))
+sub.exclude<-c("5ec3bab467509821fd35041c") # Exclude for SRMS & Debrief (already excluded for data)
+
+df.SRM <- df.SRM %>%
+  dplyr::filter(!SubID %in% sub.exclude)
+
+df.trialTest <- df.trial %>%
+  separate(col = uniqueid, sep = ":", c("PROLIFIC_PID","Version"), remove = FALSE) %>%
+  #dplyr::filter(!uniqueid %in% sub.exclude) %>% 
+  filter(!is.na(rt)) %>%
+  select(-c('initrt','phase','moneyEarned','platform','word','color')) %>%
+  filter(Version=="TSS-Stress_20210125")
+
+# Create vector of trial number for each subject's session
+tmp.trialdata<-df.trialTest %>% group_by(uniqueid) %>% dplyr::summarise(numtrials=n())
+for (t in 1:dim(tmp.trialdata)[1]) { 
+  Trials = seq(1,tmp.trialdata$numtrials[t])
+  if (t==1) {
+    TrialSessionNum <- Trials
+  }  else {
+    TrialSessionNum <- append(TrialSessionNum,Trials)
+  }
+}
+
+# Create vector of # of corrects so far
+tmp.trialdata<-df.trialTest %>% group_by(uniqueid, blockNum, intervalNum) %>% 
+  dplyr::summarise(numtrials=n())
+# idOrderList <- c(unique(df.trialTest$uniqueid))
+# tmp.trialdata[match(idOrderList, tmp.trialdata$uniqueid),]
+
+tmp.findTrial = count(tmp.trialdata, vars = "uniqueid")
+
+df.trialTest <- inner_join(df.trialTest %>%
+                             group_by(uniqueid,blockNum,intervalNum) %>%
+                             dplyr::mutate(cumCorrect=cumsum(hit)) %>% ungroup(),
+                          df.trialTest %>%
+                            group_by(uniqueid,blockNum,intervalNum) %>%
+                            dplyr::summarise(totalHit=sum(hit)),
+                          by=c('uniqueid',
+                               'blockNum',
+                               'intervalNum')) %>%
+  group_by(uniqueid) %>%
+  dplyr::mutate(TrialSessionNum=1:n()) %>% ungroup()
+
+# Create additional variables
+df.trialTest <- df.trialTest %>% 
+  mutate(AccRT=ifelse(hit==1,rt,NaN),
+         type=droplevels(factor(type)),
+         congruence=as.numeric(type=='congruent'),
+         catDiffLevel=relevel(fct_collapse(intervalType,
+                                             'easy'=c('LowEasy','HighEasy'),
+                                             'hard'=c('LowHard','HighHard')),ref='easy'),
+         catRewardLevel=relevel(fct_collapse(intervalType,
+                                              'High'=c('HighEasy','HighHard'),
+                                              'Low'=c('LowEasy','LowHard')),ref='Low'),
+         threshold=ifelse(catDiffLevel=="easy",5,8),
+         isReached = ifelse(cumCorrect>threshold,1,0),
+         dGoal = abs(cumCorrect - threshold),
+         scaledDGoal = scale(dGoal, center = TRUE, scale = TRUE),
+         IntervalsPerBlock = max(unique(intervalNum)),
+         IntervalSessionNum = IntervalsPerBlock*(blockNum-1) + intervalNum,
+         scaledIntervalSessionNum = scale(IntervalSessionNum, center = TRUE,scale = TRUE),
+         TrialSessionNum = TrialSessionNum,
+         scaledTrialSessionNum = scale(TrialSessionNum, center = TRUE, scale = TRUE),
+         scaledIntervalBlockNum = scale(intervalNum, center = TRUE,scale = TRUE),
+         log10_AccRT=log10(AccRT),
+         scaled_log10_AccRT=scale(log10_AccRT, center = TRUE, scale = TRUE))
+
+df.trialTest <- df.trialTest %>%
+  group_by(uniqueid,PROLIFIC_PID, Version,blockNum,intervalNum) %>%
+  mutate(intervalReached = ifelse(max(cumCorrect >= threshold),1,0),
+         hardReached = ifelse(max(cumCorrect)>=8,1,0),
+         lastTrial = ifelse(trialNum == max(trialNum),1,0),
+         prev_cong = lag(congruence)) ## previous trial congruency
+
+df.trialTest <- df.trialTest %>% relocate("cumCorrect", .after = "hit")
+df.trialTest <- df.trialTest %>% relocate("isReached", .after = "cumCorrect")
+df.trialTest <- df.trialTest %>% relocate("intervalReached", .after = "isReached")
+df.trialTest <- df.trialTest %>% relocate("intervalNum", .after = "blockNum")
+df.trialTest <- df.trialTest %>% relocate("trialNum", .after = "intervalNum")
+df.trialTest <- df.trialTest %>% relocate("catDiffLevel", .after = "intervalType")
+df.trialTest <- df.trialTest %>% relocate("catRewardLevel", .after = "catDiffLevel")
+
+# to verify the order of your factors: 
+levels(df.trialTest$catRewardLevel)
+levels(df.trialTest$catDiffLevel)
+
+# contrast code: Low Reward or Easy = -1, High Reward or Hard = -1
+contrast.code<-tmp.code<-contr.sum(2)*-1
+contrasts(df.trialTest$catRewardLevel)<-contrast.code
+contrasts(df.trialTest$catDiffLevel)<-contrast.code
+
+# to verify that the contrast codes are implemented correcty, you can use the following lines of code:
+contrasts(df.trialTest$catRewardLevel)
+contrasts(df.trialTest$catDiffLevel)
+```
+
+
+# Format dataframe for interval-level data
+questionType: 1 = stressed; 0 = good
+```{r include=FALSE}
+df.rating <- df.trial %>%
+  separate(col = uniqueid, sep = ":", c("PROLIFIC_PID","Version"), remove = FALSE) %>%
+  #dplyr::filter(!uniqueid %in% sub.exclude) %>%
+  filter(is.na(hit)) %>%
+  select('blockNum','intervalNum','intervalType','question','rating','uniqueid',"PROLIFIC_PID","Version") %>%
+  filter(Version=="TSS-Stress_20210125") %>%
+  group_by(uniqueid,PROLIFIC_PID, Version) %>%
+  mutate(sd_Rating = sd(rating),
+         cRating = scale(rating, center = TRUE, scale = TRUE))
+tmp.finderror = count(df.rating, vars = "uniqueid")
+
+df.interval <- df.trialTest %>% 
+  group_by(uniqueid,PROLIFIC_PID, Version,blockNum,intervalNum,intervalLength,intervalType,catDiffLevel, catRewardLevel) %>% 
+  dplyr::summarise(mean_Acc=mean(hit,na.rm=T),
+                   sum_Acc=sum(hit,na.rm=T),
+                   mean_AccRT=mean(AccRT,na.rm=T),
+                   mean_RT=mean(rt,na.rm=T),
+                   mean_Congruence=mean(congruence,na.rm=T), 
+                   scaledIntervalSessionNum = mean(scaledIntervalSessionNum),
+                   scaledIntervalBlockNum = mean(scaledIntervalBlockNum), .groups="keep") %>% ungroup() %>%
+  mutate(norm_sum_Acc=(sum_Acc/intervalLength)*1000,
+         threshold=ifelse(catDiffLevel=="easy",5,8),
+         reached = ifelse(sum_Acc>=threshold,1,0),
+         hardGoalReached = ifelse(sum_Acc>=8,1,0),
+         numExceed = ifelse(reached==1, sum_Acc-threshold,NaN),
+         scaledMeanCong = scale(mean_Congruence, center = TRUE, scale = TRUE),
+         log10_AccRT=log10(mean_AccRT),
+         scale_log10_AccRT=scale(log10(mean_AccRT)),
+         scale_meanAcc = scale(mean_Acc))
+
+df.interval$scaled_RR <- scale(df.interval$norm_sum_Acc)
+
+df.interval <- df.interval %>%
+  join(df.rating,by=c('uniqueid',"PROLIFIC_PID","Version",'blockNum','intervalNum','intervalType') )
+
+## find subjectid that rated sd_ratings as 0
+sub.noRatings <- unique(df.interval$uniqueid[df.interval$sd_Rating == 0])
+
+## filter out trial level data based on sub.noRatings
+df.trialTest <- df.trialTest %>%
+  dplyr::filter(!uniqueid %in% sub.noRatings)
+
+
+df.interval <- df.interval %>%
+  filter(abs(scale_log10_AccRT) < 3,mean_Congruence<=0.6, sd_Rating != 0)
+
+df.interval <- df.interval %>%
+  group_by(uniqueid,PROLIFIC_PID, Version,blockNum) %>%
+  mutate(prev_reached = lag(reached),
+         prev_rating = lag(rating),
+         prev_question = lag(question),
+         prev_reward = lag(catRewardLevel))
+
+tmp.avgNumTrials_Completed <- df.interval %>%
+  group_by(catDiffLevel, catRewardLevel) %>%
+  summarise (mean_numTrials = mean(sum_Acc))
+
+```
+
+
+## Summarise data by subject
+```{r include=FALSE}
+df.summary <- df.interval %>% 
+  group_by(uniqueid) %>% 
+  dplyr::summarise(mean_Acc_subj=mean(mean_Acc,na.rm=T),
+                   mean_RT_subj=mean(mean_AccRT,na.rm=T),
+                   nInterval=length(mean_Acc), .groups="keep") %>%
+  filter(mean_Acc_subj>0.6,mean_RT_subj<2000) %>%
+  ungroup()
+
+df.summaryRating <- df.interval %>% 
+  group_by(uniqueid, catDiffLevel, question) %>% 
+  dplyr::summarise(mean_rating_subj=mean(rating,na.rm=T),
+                   nInterval=length(mean_Acc), .groups="keep") %>%
+  ungroup()
+
+df.summary.block <-  df.interval %>% 
+  group_by(uniqueid,intervalType,catDiffLevel) %>% 
+  dplyr::summarise(mean_Acc_subj=mean(mean_Acc,na.rm=T),
+                   mean_RT_subj=mean(mean_AccRT,na.rm=T),
+                   nInterval=length(mean_Acc),
+                   mean_norm_sum_Acc = mean(norm_sum_Acc),
+                   numReached = sum(reached),
+                   numNotReached = length(mean_Acc) - sum(reached),
+                   .groups="keep") %>%
+  filter(mean_Acc_subj>0.7,mean_RT_subj<2000,nInterval>=12) %>% ungroup()
+
+```
+
+
+
+# Main Text Tables
+## Table 10 - RR based on challenge level & reward level
+```{r}
+model.rr<-lmer(formula = norm_sum_Acc ~ catDiffLevel * catRewardLevel + reached + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel + reached| uniqueid), 
+               data = df.interval, REML=F)
+
+model.rr.simple<-lmer(formula = norm_sum_Acc ~ catDiffLevel * catRewardLevel + reached +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = df.interval, REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Response Rate - Interval Based",
+          dv.labels = c('Response Rate (Full RE)','Response Rate (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Table 11 - RT and Acc based on challenge & reward (goal-reached)
+### RT
+```{r}
+model.rr<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel * isReached + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel + isReached| uniqueid), 
+               data = subset(df.trialTest,intervalReached == 1), REML=F)
+
+model.rr.simple<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel * isReached +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest,intervalReached == 1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Trial Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, transform = NULL)
+anova(model.rr)
+```
+
+### Acc
+```{r}
+model.rr<-glmer(formula = hit ~ catDiffLevel * catRewardLevel * isReached + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.trialTest, intervalReached == 1), family = "binomial")
+
+model.rr.simple<-glmer(formula = hit ~ catDiffLevel * catRewardLevel * isReached +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest, intervalReached == 1), family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "Acc - Trial Based",
+          dv.labels = c('Hit (Full RE)','Hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, transform = NULL)
+Anova(model.rr)
+```
+
+## Table 12 - Affective Ratings Based on Challenge and Reward Level, Controlling for Performance 
+### Stress
+```{r}
+model.rr<-lmer(formula = rating ~ scaled_RR * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scaled_RR + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ scaled_RR * catDiffLevel * catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Stress",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### Pos affect
+```{r}
+model.rr<-lmer(formula = rating ~ scaled_RR * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scaled_RR + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ scaled_RR * catDiffLevel * catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Good",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+
+
+# Main Text Figures
+## Figure 7 - Effects of challenge level, reward level, and goal completion on performance
+### 7A: RR
+```{r warning=TRUE, include=FALSE}
+dfwc <- summarySEwithinO(df.interval, measurevar="norm_sum_Acc", 
+                         withinvars=c("catDiffLevel", "catRewardLevel", "reached"),
+                         idvar="uniqueid", na.rm=TRUE, conf.interval=.95)
+```
+
+```{r}
+p.RR<-ggplot(dfwc, aes(x=catRewardLevel, y=norm_sum_AccNormed, fill=catDiffLevel)) +
+  geom_bar(stat="identity", color="black", position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=norm_sum_AccNormed-se, ymax=norm_sum_AccNormed+se), width=.2,
+                 position=position_dodge(.9)) + coord_cartesian(ylim=c(0.5,1.2)) +
+  labs(x="", y = "Response Rate")+
+  facet_grid(.~reached) +
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  guides(fill=guide_legend(title="")) +
+  ggtitle("Response Rate by DiffLvl and RewardLvl") +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)) #+
+  #geom_text(aes(label = norm_sum_Acc), position = position_dodge(width = 0.9), vjust = -5)
+p.RR
+```
+
+### 7B: Trial-wise RT
+```{r warning=TRUE, include=FALSE}
+dfwc <- summarySEwithinO(df.trialTest, measurevar="AccRT", 
+                         withinvars=c("catDiffLevel", "catRewardLevel", "intervalReached"),
+                         idvar="uniqueid", na.rm=TRUE, conf.interval=.95)
+```
+
+```{r}
+p.RR<-ggplot(dfwc, aes(x=catRewardLevel, y=AccRTNormed, fill=catDiffLevel)) +
+  geom_bar(stat="identity", color="black", position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=AccRTNormed-se, ymax=AccRTNormed+se), width=.2,
+                 position=position_dodge(.9)) + coord_cartesian(ylim=c(750,1300)) +
+  labs(x="isReached", y = "AccRT")+
+  facet_grid(.~intervalReached) +
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  guides(fill=guide_legend(title="Reward Level")) + 
+  #scale_fill_discrete(labels = c("not reached","reached")) +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+### 7C: Trial-wise acc
+```{r warning=TRUE, include=FALSE}
+dfwc <- summarySEwithinO(df.trialTest, measurevar="hit", 
+                         withinvars=c("catDiffLevel", "catRewardLevel", "intervalReached"),
+                         idvar="uniqueid", na.rm=TRUE, conf.interval=.95)
+```
+
+```{r}
+p.RR<-ggplot(dfwc, aes(x=catRewardLevel, y=hitNormed, fill=catDiffLevel)) +
+  geom_bar(stat="identity", color="black", position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=hitNormed-se, ymax=hitNormed+se), width=.2,
+                 position=position_dodge(.9)) + coord_cartesian(ylim=c(0.5,0.95)) +
+  labs(x="Interval Reached", y = "Hit")+
+  facet_grid(~ intervalReached) +
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  guides(fill=guide_legend(title="")) + 
+  #scale_fill_discrete(labels = c("not reached","reached")) +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+## Figure 8 - Goal completion effects
+### RT
+### Visualizing rt - goal completion
+```{r warning=TRUE, include=FALSE}
+dfwc <- summarySEwithinO(subset(df.trialTest, intervalReached ==1), measurevar="AccRT", 
+                         withinvars=c("catDiffLevel", "catRewardLevel", "isReached"),
+                         idvar="uniqueid", na.rm=TRUE, conf.interval=.95)
+```
+
+```{r}
+p.RR<-ggplot(dfwc, aes(x=catRewardLevel, y=AccRTNormed, fill=catDiffLevel)) +
+  geom_bar(stat="identity", color="black", position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=AccRTNormed-se, ymax=AccRTNormed+se), width=.2,
+                 position=position_dodge(.9)) + coord_cartesian(ylim=c(725,825)) +
+  labs(x="Trial Goal Reached", y = "AccRT")+
+  facet_grid(~ isReached) +
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+ # guides(fill=guide_legend(title="isReached")) + 
+  #scale_fill_discrete(labels = c("not reached","reached")) +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+
+### Acc
+```{r warning=TRUE, include=FALSE}
+dfwc <- summarySEwithinO(subset(df.trialTest, intervalReached==1), measurevar="hit", 
+                         withinvars=c("catDiffLevel", "catRewardLevel", "isReached"),
+                         idvar="uniqueid", na.rm=TRUE, conf.interval=.95)
+```
+
+```{r}
+p.RR<-ggplot(dfwc, aes(x=catRewardLevel, y=hitNormed, fill=catDiffLevel)) +
+  geom_bar(stat="identity", color="black", position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=hitNormed-se, ymax=hitNormed+se), width=.2,
+                 position=position_dodge(.9)) + coord_cartesian(ylim=c(0.91,0.95)) +
+  labs(x="Trial Goal Reached", y = "Acc")+
+  facet_grid(~ isReached) +
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  #guides(fill=guide_legend(title="isReached")) + 
+  #scale_fill_discrete(labels = c("not reached","reached")) +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+## Figure 9 - Goal proximity effects
+### RT
+#### goal proximity graphs
+```{r include=FALSE}
+df.trialSummary <- df.trialTest %>% 
+  mutate(dGoal = cumCorrect - threshold,
+         absDGoal = abs(dGoal))
+
+df.trialSummary <- subset(df.trialSummary, intervalReached ==1 & dGoal >= -7 & dGoal <=1)
+
+dfwc <- summarySEwithinO(df.trialSummary, measurevar="AccRT", 
+                         withinvars=c("catDiffLevel", "catRewardLevel","dGoal"),
+                         idvar="uniqueid", na.rm=TRUE, conf.interval=.95)
+
+```
+
+```{r}
+p.RR<-ggplot(dfwc, aes(x=dGoal, y=AccRTNormed, group = interaction(catDiffLevel,catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel)) +
+  #geom_smooth(method = 'lm',se=F) +
+  geom_point(size = 2) +
+  geom_line() +
+  geom_errorbar(aes(x = dGoal, ymin=AccRTNormed-se, ymax=AccRTNormed+se), width=.1) + #coord_cartesian(ylim=c(650,950)) +
+  labs(x="distance from goal", y = "AccRT")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  #guides(fill=guide_legend(title="isReached")) + 
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+### Acc
+```{r include=FALSE}
+df.trialSummary <- df.trialTest %>% 
+  mutate(dGoal = cumCorrect - threshold,
+         absDGoal = abs(dGoal))
+
+df.trialSummary <- df.trialSummary %>%
+  subset(intervalReached ==1 & dGoal >= -7 & dGoal <=1)
+
+df.trialSummary <- df.trialSummary[!(df.trialSummary$dGoal == -5 & (df.trialSummary$intervalType == "LowEasy"|df.trialSummary$intervalType == "HighEasy")),]
+
+dfwc <- summarySEwithinO(df.trialSummary, measurevar="hit", 
+                         withinvars=c("catDiffLevel", "catRewardLevel","dGoal"),
+                         idvar="uniqueid", na.rm=TRUE, conf.interval=.95)
+
+```
+
+```{r}
+p.RR<-ggplot(dfwc, aes(x=dGoal, y=hitNormed, group = interaction(catDiffLevel,catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel)) +
+  #geom_smooth(method = 'lm',se=F) +
+  geom_point(size = 2) +
+  geom_line() +
+  geom_errorbar(aes(x = dGoal, ymin=hitNormed-se, ymax=hitNormed+se), width=.1) + #coord_cartesian(ylim=c(650,950)) +
+  labs(x="distance from goal", y = "Hit")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  #guides(fill=guide_legend(title="isReached")) + 
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+## Figure 10 - Affective Ratings based on challenge level and reward level
+### Stress
+```{r}
+library(effects)
+model.rr<-lmer(formula = rating ~ scaled_RR * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scaled_RR + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+model_fig <- data.frame(effect(c("catDiffLevel","catRewardLevel"), model.rr))
+
+p.RR<-ggplot(model_fig, aes(x=catRewardLevel, y=fit, fill=catDiffLevel)) +
+  geom_bar(stat="identity", color="black", position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=fit-se, ymax=fit+se), width=.2,
+                 position=position_dodge(.9)) + coord_cartesian(ylim=c(4.5,7)) +
+  labs(x="", y = "Stress Rating")+
+  #facet_grid(.~reached) +
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  #ggtitle("Ratings of Stress by DiffLvl & interval goal reached") + 
+  guides(fill=guide_legend(title="")) + 
+  theme(plot.title = element_text(size = 20),
+        legend.title = element_text(size = 15)) +
+  #scale_fill_discrete(labels = c("not reached","reached")) +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+### Pos affect
+```{r}
+model.rr<-lmer(formula = rating ~ scaled_RR * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scaled_RR + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+model_fig <- data.frame(effect(c("catDiffLevel","catRewardLevel"), model.rr))
+
+p.RR<-ggplot(model_fig, aes(x=catRewardLevel, y=fit, fill=catDiffLevel)) +
+  geom_bar(stat="identity", color="black", position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=fit-se, ymax=fit+se), width=.2,
+                 position=position_dodge(.9)) + coord_cartesian(ylim=c(4.5,7)) +
+  labs(x="", y = "Good Rating")+
+  #facet_grid(.~reached) +
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  #ggtitle("Ratings of Stress by DiffLvl & interval goal reached") + 
+  guides(fill=guide_legend(title="")) + 
+  theme(plot.title = element_text(size = 20),
+        legend.title = element_text(size = 15)) +
+  #scale_fill_discrete(labels = c("not reached","reached")) +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))
+p.RR
+```
+
+## Figure 11 - Affective Ratings predicted by performance, for goal-completed intervals only 
+### 11A: Stress & RR
+```{r}
+df.ratingStress <- subset(df.interval, question==1)
+df.ratingStressReached <- subset(df.ratingStress, reached == 1)
+p.RR<-ggplot(df.ratingStressReached, aes(x=scaled_RR, y=rating, group=interaction(catDiffLevel, catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel, fill = catDiffLevel)) +
+  geom_smooth(method = 'lm') +
+  labs(x="RR", y = "Stress rating")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)) +
+  scale_x_continuous()
+p.RR
+```
+
+### 11B: Pos affect & RR
+```{r}
+df.ratingGood <- subset(df.interval, question==0)
+df.ratingGoodReached <- subset(df.ratingGood, reached == 1)
+p.RR<-ggplot(df.ratingGoodReached, aes(x=norm_sum_Acc, y=rating, group=interaction(catDiffLevel, catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel, fill = catDiffLevel)) +
+  geom_smooth(method = 'lm') +
+  labs(x="RR", y = "Good rating")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)) +
+  scale_x_continuous()
+p.RR
+```
+
+### 11C: Stress & RT
+```{r}
+p.RR<-ggplot(df.ratingStressReached, aes(x=scale_log10_AccRT, y=rating, group=interaction(catDiffLevel, catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel, fill = catDiffLevel)) +
+  geom_smooth(method = 'lm') +
+  labs(x="scale_log10_AccRT", y = "Stress rating")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)) +
+  scale_x_continuous()
+p.RR
+```
+
+### 11D: Pos affect & RT
+```{r}
+p.RR<-ggplot(df.ratingGoodReached, aes(x=scale_log10_AccRT, y=rating, group=interaction(catDiffLevel, catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel, fill = catDiffLevel)) +
+  geom_smooth(method = 'lm') +
+  labs(x="scale_log10_AccRT", y = "Good rating")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)) +
+  scale_x_continuous()
+p.RR
+```
+
+### 11E: Stress & avg accuracy
+```{r}
+p.RR<-ggplot(df.ratingStressReached, aes(x=scale_meanAcc, y=rating, group=interaction(catDiffLevel, catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel, fill = catDiffLevel)) +
+  geom_smooth(method = 'lm') +
+  labs(x="scale_meanAcc", y = "Stress rating")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)) +
+  scale_x_continuous()
+p.RR
+```
+
+### 11F: Pos affect & avg accuracy
+```{r}
+p.RR<-ggplot(df.ratingGoodReached, aes(x=scale_meanAcc, y=rating, group=interaction(catDiffLevel, catRewardLevel), colour=catDiffLevel, linetype = catRewardLevel, fill = catDiffLevel)) +
+  geom_smooth(method = 'lm') +
+  labs(x="scale_meanAcc", y = "Good rating")+
+  theme_classic() + theme(text = element_text(size=20),
+                           axis.text.y = element_text(size=10),
+                           legend.position = 'top') +
+  scale_fill_brewer(palette="Set1") +
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)) +
+  scale_x_continuous()
+p.RR
+```
+
+
+
+
+# Supplement
+## Supplement Table 2 - congruency
+### RT
+```{r}
+model.rr<-lmer(formula = AccRT ~ congruence * prev_cong * catRewardLevel + catDiffLevel + intervalReached + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + congruence + prev_cong + catDiffLevel + catRewardLevel| uniqueid), 
+               data = df.trialTest, REML=F)
+
+model.rr.simple<-lmer(formula = AccRT ~ congruence * prev_cong * catRewardLevel+ catDiffLevel + intervalReached +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = df.trialTest, REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Trial Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, show.df=TRUE)
+
+anova(model.rr)
+```
+
+### Acc
+```{r}
+model.rr<-glmer(formula = hit ~ congruence * prev_cong * catRewardLevel + catDiffLevel  + intervalReached + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + congruence + prev_cong | uniqueid), 
+               data = df.trialTest, family = "binomial")
+
+model.rr.simple<-glmer(formula = hit ~ congruence * prev_cong* catRewardLevel + catDiffLevel  + intervalReached +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = df.trialTest, family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "Acc - Trial Based",
+          dv.labels = c('Hit (Full RE)','Hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, show.df=TRUE, transform = NULL)
+Anova(model.rr)
+```
+
+## Supplement table 8 - Interval Goal Attainment and Higher Goal Attainment
+### Reached
+```{r}
+library(car)
+model.rr<-glmer(formula = reached ~ catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +   
+                 (1 + catDiffLevel + catRewardLevel| uniqueid), 
+               data = df.interval, family = "binomial")
+
+model.rr.simple<-glmer(formula = reached ~ catDiffLevel * catRewardLevel+ 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = df.interval, family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "Reached - Interval Based",
+          dv.labels = c('Hit (Full RE)','Hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, transform = NULL)
+Anova(model.rr)
+```
+
+### High goal reached
+```{r}
+model.rr<-glmer(formula = hardGoalReached ~ catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +   
+                 (1 + catDiffLevel + catRewardLevel| uniqueid), 
+               data = df.interval, family = "binomial")
+
+model.rr.simple<-glmer(formula = hardGoalReached ~ catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = df.interval, family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "hardIntervalReached - Interval Based",
+          dv.labels = c('Hit (Full RE)','Hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, transform = NULL)
+Anova(model.rr)
+```
+
+## Supplement Table 9 - RT and Acc based on challenge & reward
+### Rt 
+```{r}
+model.rr<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel * isReached + intervalReached + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel + isReached+ intervalReached| uniqueid), 
+               data = df.trialTest, REML=F)
+
+model.rr.simple<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel * isReached + intervalReached+
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = df.trialTest, REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Trial Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### Accuracy
+```{r}
+model.rr<-glmer(formula = hit ~ catDiffLevel * catRewardLevel * isReached + intervalReached+ 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel+ intervalReached| uniqueid), 
+               data = df.trialTest, family = "binomial")
+
+model.rr.simple<-glmer(formula = hit ~ catDiffLevel * catRewardLevel * isReached + intervalReached+
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = df.trialTest, family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "Acc - Trial Based",
+          dv.labels = c('Hit (Full RE)','Hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, transform = NULL)
+Anova(model.rr)
+```
+
+## Supplement Table 11 - Reaction Time Based on Goal Completion 
+### Before goal completion
+```{r}
+model.rr<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel + intervalReached + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel + intervalReached| uniqueid), 
+               data = subset(df.trialTest, isReached == 0), REML=F)
+
+model.rr.simple<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel +intervalReached +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest, isReached == 0), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Trial Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### After reaching goal
+```{r}
+model.rr<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.trialTest, isReached == 1), REML=F)
+
+model.rr.simple<-lmer(formula = AccRT ~ catDiffLevel * catRewardLevel +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest, isReached == 1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Trial Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Supplement Table 12 - Trial acc based on goal completion
+### Before reaching goal
+```{r}
+model.rr<-glmer(formula = hit ~ catDiffLevel * catRewardLevel + intervalReached+ 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel+ intervalReached| uniqueid), 
+               data = subset(df.trialTest, isReached == 0), family = "binomial")
+
+model.rr.simple<-glmer(formula = hit ~ catDiffLevel * catRewardLevel + intervalReached+
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest, isReached == 0), family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "Acc - Trial Based",
+          dv.labels = c('Hit (Full RE)','Hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, show.df = TRUE, transform = NULL)
+Anova(model.rr)
+```
+
+### After reaching goal
+```{r}
+model.rr<-glmer(formula = hit ~ catDiffLevel * catRewardLevel+ 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.trialTest, isReached == 1), family = "binomial")
+
+model.rr.simple<-glmer(formula = hit ~ catDiffLevel * catRewardLevel + intervalReached+
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest, isReached == 1), family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "Acc - Trial Based",
+          dv.labels = c('Hit (Full RE)','Hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, transform = NULL)
+Anova(model.rr)
+```
+
+## Supplement Table 13 - Goal proximity
+### Rt
+```{r}
+model.rr<-lmer(formula = AccRT ~ scaledDGoal * catDiffLevel * catRewardLevel  + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + scaledDGoal + catRewardLevel| uniqueid), 
+               data = subset(df.trialTest, intervalReached == 1 & trialNum != 1 & trialNum != 2 & lastTrial != 1), REML=F)
+
+model.rr.simple<-lmer(formula = AccRT ~ scaledDGoal * catDiffLevel * catRewardLevel +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest, intervalReached == 1 & trialNum != 1 & trialNum != 2 & lastTrial != 1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Trial Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### Acc 
+```{r}
+library(car)
+model.rr<-glmer(formula = hit ~ scaledDGoal * catDiffLevel * catRewardLevel + 
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + catDiffLevel + scaledDGoal + catRewardLevel| uniqueid), 
+               data = subset(df.trialTest, intervalReached == 1 & trialNum != 1 & trialNum != 2 & lastTrial != 1), family = "binomial")
+
+model.rr.simple<-glmer(formula = hit ~ scaledDGoal * catDiffLevel * catRewardLevel +
+                 scaledTrialSessionNum + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.trialTest, intervalReached == 1 & trialNum != 1 & trialNum != 2 & lastTrial != 1), family = "binomial")
+
+tab_model(model.rr, model.rr.simple,
+          title = "hit - Trial Based",
+          dv.labels = c('hit (Full RE)','hit (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE, transform = )
+Anova(model.rr)
+```
+
+## Supplement Table 14 - Affective Ratings 
+### Stress
+```{r}
+model.rr<-lmer(formula = rating ~ catDiffLevel * catRewardLevel * reached + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + catDiffLevel + catRewardLevel + reached| uniqueid), 
+               data = subset(df.interval, question == 1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ catDiffLevel * catRewardLevel *reached +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Stress",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### Pos affect
+```{r}
+model.rr<-lmer(formula = rating ~ catDiffLevel * catRewardLevel * reached + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + catDiffLevel + catRewardLevel + reached| uniqueid), 
+               data = subset(df.interval, question == 0), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ catDiffLevel * catRewardLevel * reached +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 0), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Good",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Supplement Table 15 - Affective Ratings Based on Average Reaction Time 
+### Stress
+```{r}
+model.rr<-lmer(formula = rating ~ scale_log10_AccRT * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scale_log10_AccRT + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ scale_log10_AccRT * catDiffLevel * catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Stress",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### Pos affect
+```{r}
+model.rr<-lmer(formula = rating ~ scale_log10_AccRT  * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scale_log10_AccRT + catDiffLevel+ catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ scale_log10_AccRT * catDiffLevel * catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Good",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Supplement Table 16 - Affective Ratings Based on Average Accuracy 
+### Stress
+```{r}
+model.rr<-lmer(formula = rating ~ scale_meanAcc * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scale_meanAcc + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ scale_meanAcc * catDiffLevel * catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Stress",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### Pos affect
+```{r}
+model.rr<-lmer(formula = rating ~ scale_meanAcc * catDiffLevel * catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + scale_meanAcc + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ scale_meanAcc * catDiffLevel * catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Good",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Supplement Table 17 - Response Rate and Mean Accurate RT Based on Previous Interval’s Stress Rating
+### RR (prev_rating -- stress)
+```{r}
+model.rr<-lmer(formula = norm_sum_Acc ~ prev_rating + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + prev_rating + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, prev_question == 1 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = norm_sum_Acc ~ prev_rating + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, prev_question == 1 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Response Rate - Interval Based",
+          dv.labels = c('Response Rate (Full RE)','Response Rate (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### mean Acc RT  (prev_rating -- stress)
+```{r}
+model.rr<-lmer(formula = mean_AccRT ~ prev_rating + catDiffLevel + catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + prev_rating + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, prev_question == 1 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = mean_AccRT ~ prev_rating + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, prev_question == 1 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Interval Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Supplement Table 18 - Response Rate and Mean Accurate RT Based on Previous Interval’s Pos Affect Rating
+### Response Rate (prev_rating -- good)
+```{r}
+model.rr<-lmer(formula = norm_sum_Acc ~ prev_rating + catDiffLevel + catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + prev_rating + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, prev_question == 0 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = norm_sum_Acc ~ prev_rating + catDiffLevel + catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, prev_question == 0 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Response Rate - Interval Based",
+          dv.labels = c('Response Rate (Full RE)','Response Rate (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### mean Acc RT  (prev_rating -- good)
+```{r}
+model.rr<-lmer(formula = mean_AccRT ~ prev_rating + catDiffLevel + catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + prev_rating + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, prev_question == 0 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = mean_AccRT ~ prev_rating + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, prev_question == 0 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Interval Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Supplement Table 19 - Affective Ratings Based on Previous Interval’s Goal Completion
+### stress rating (prev_reached)
+```{r}
+model.rr<-lmer(formula = rating ~ prev_reached + catDiffLevel + catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + prev_reached + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ prev_reached + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 1 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Stress",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### good rating (prev_reached)
+```{r}
+model.rr<-lmer(formula = rating ~ prev_reached + catDiffLevel + catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 + prev_reached + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = rating ~ prev_reached + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, question == 0 & reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Rating - Good",
+          dv.labels = c('Rating (Full RE)','Rating (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+## Supplement Table 20 - Response Rate and Mean Accurate RT Based on Previous Interval’s Goal Completion
+### Response Rate (prev_reached)
+```{r}
+model.rr<-lmer(formula = norm_sum_Acc ~ prev_reached + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + prev_reached + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = norm_sum_Acc ~ prev_reached + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "Response Rate - Interval Based",
+          dv.labels = c('Response Rate (Full RE)','Response Rate (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+### mean Acc RT (prev_reached)
+```{r}
+model.rr<-lmer(formula = mean_AccRT ~ prev_reached + catDiffLevel + catRewardLevel + 
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum +  
+                 (1 + prev_reached + catDiffLevel + catRewardLevel| uniqueid), 
+               data = subset(df.interval, reached ==1), REML=F)
+
+model.rr.simple<-lmer(formula = mean_AccRT ~ prev_reached + catDiffLevel + catRewardLevel +
+                 scaledMeanCong + scaledIntervalSessionNum + scaledIntervalBlockNum + 
+                 (1 | uniqueid), 
+               data = subset(df.interval, reached ==1), REML=F)
+
+tab_model(model.rr, model.rr.simple,
+          title = "AccRT - Interval Based",
+          dv.labels = c('AccRT (Full RE)','AccRT (Simple)'),
+          show.re.var = TRUE, show.stat=TRUE, show.icc=FALSE, show.se = TRUE)
+anova(model.rr)
+```
+
+
+
+
